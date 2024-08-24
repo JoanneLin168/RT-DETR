@@ -12,7 +12,7 @@ import torch.distributed
 import torch.nn.functional as F 
 import torchvision
 
-from .box_ops import box_cxcywh_to_xyxy, box_iou, generalized_box_iou
+from .util.box_ops import box_cxcywh_to_xyxy, box_iou, generalized_box_iou
 from ...misc.dist_utils import get_world_size, is_dist_available_and_initialized
 from ...core import register
 

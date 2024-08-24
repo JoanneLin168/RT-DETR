@@ -281,7 +281,8 @@ class TransformerDecoder(nn.Module):
             ref_points = inter_ref_bbox
             ref_points_detach = inter_ref_bbox.detach()
 
-        return torch.stack(dec_out_bboxes), torch.stack(dec_out_logits)
+        # Adding output and ref_points_detach for DETRSegm (segmentation.py)
+        return torch.stack(dec_out_bboxes), torch.stack(dec_out_logits), output, ref_points_detach
 
 
 @register()
@@ -572,7 +573,7 @@ class RTDETRTransformerv2(nn.Module):
             self._get_decoder_input(memory, spatial_shapes, denoising_logits, denoising_bbox_unact)
 
         # decoder
-        out_bboxes, out_logits = self.decoder(
+        out_bboxes, out_logits, hs, memory = self.decoder(
             init_ref_contents,
             init_ref_points_unact,
             memory,
@@ -597,7 +598,7 @@ class RTDETRTransformerv2(nn.Module):
                 out['dn_aux_outputs'] = self._set_aux_loss(dn_out_logits, dn_out_bboxes)
                 out['dn_meta'] = dn_meta
 
-        return out
+        return out, hs, memory
 
 
     @torch.jit.unused

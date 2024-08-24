@@ -12,7 +12,7 @@ import torch.nn.functional as F
 from scipy.optimize import linear_sum_assignment
 from typing import Dict 
 
-from .box_ops import box_cxcywh_to_xyxy, generalized_box_iou
+from .util.box_ops import box_cxcywh_to_xyxy, generalized_box_iou
 
 from ...core import register
 

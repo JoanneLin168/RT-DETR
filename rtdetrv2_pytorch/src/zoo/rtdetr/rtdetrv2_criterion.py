@@ -9,10 +9,13 @@ import torchvision
 
 import copy
 
-from .box_ops import box_cxcywh_to_xyxy, box_iou, generalized_box_iou
+from .util.box_ops import box_cxcywh_to_xyxy, box_iou, generalized_box_iou
 from ...misc.dist_utils import get_world_size, is_dist_available_and_initialized
 from ...core import register
 
+# loss_mask helper functions
+from .util.misc import NestedTensor, nested_tensor_from_tensor_list, interpolate
+from .segmentation import sigmoid_focal_loss, dice_loss
 
 @register()
 class RTDETRCriterionv2(nn.Module):
@@ -114,6 +117,36 @@ class RTDETRCriterionv2(nn.Module):
         loss_giou = loss_giou if boxes_weight is None else loss_giou * boxes_weight
         losses['loss_giou'] = loss_giou.sum() / num_boxes
         return losses
+    
+    # Source: https://github.com/fundamentalvision/Deformable-DETR/blob/main/models/deformable_detr.py#L281
+    def loss_masks(self, outputs, targets, indices, num_boxes):
+        """Compute the losses related to the masks: the focal loss and the dice loss.
+           targets dicts must contain the key "masks" containing a tensor of dim [nb_target_boxes, h, w]
+        """
+        assert "pred_masks" in outputs
+
+        src_idx = self._get_src_permutation_idx(indices)
+        tgt_idx = self._get_tgt_permutation_idx(indices)
+        src_masks = outputs["pred_masks"]
+        src_masks = src_masks[src_idx]
+        masks = [t["masks"] for t in targets]
+        # TODO use valid to mask invalid areas due to padding in loss
+        target_masks, valid = nested_tensor_from_tensor_list(masks).decompose()
+        target_masks = target_masks.to(src_masks)
+        target_masks = target_masks[tgt_idx]
+
+        # upsample predictions to the target size
+        src_masks = interpolate(src_masks[:, None], size=target_masks.shape[-2:],
+                                mode="bilinear", align_corners=False)
+        src_masks = src_masks[:, 0].flatten(1)
+
+        target_masks = target_masks.flatten(1)
+        target_masks = target_masks.view(src_masks.shape)
+        losses = {
+            "loss_mask": sigmoid_focal_loss(src_masks, target_masks, num_boxes),
+            "loss_dice": dice_loss(src_masks, target_masks, num_boxes),
+        }
+        return losses
 
     def _get_src_permutation_idx(self, indices):
         # permute predictions following indices
@@ -132,6 +165,7 @@ class RTDETRCriterionv2(nn.Module):
             'boxes': self.loss_boxes,
             'focal': self.loss_labels_focal,
             'vfl': self.loss_labels_vfl,
+            'masks': self.loss_masks,
         }
         assert loss in loss_map, f'do you really want to compute {loss} loss?'
         return loss_map[loss](outputs, targets, indices, num_boxes, **kwargs)

@@ -3,7 +3,7 @@
 
 
 from .arch import *
-from .criterion import *
+# from .criterion import *
 from .postprocessor import *
 
 # 

@@ -2,7 +2,7 @@
 """
 
 
-from .rtdetr import RTDETR
+from .rtdetr import RTDETR, RTDETRSegm
 from .matcher import HungarianMatcher
 from .hybrid_encoder import HybridEncoder
 from .rtdetr_decoder import RTDETRTransformer
