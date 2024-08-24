@@ -18,6 +18,8 @@ from .utils import bias_init_with_prob
 
 from ...core import register
 
+from .segmentation import *
+
 __all__ = ['RTDETRTransformerv2']
 
 
@@ -250,11 +252,13 @@ class TransformerDecoder(nn.Module):
                 memory_spatial_shapes,
                 bbox_head,
                 score_head,
+                mask_head,
                 query_pos_head,
                 attn_mask=None,
                 memory_mask=None):
         dec_out_bboxes = []
         dec_out_logits = []
+        dec_out_masks = []
         ref_points_detach = F.sigmoid(ref_points_unact)
 
         output = target
@@ -268,6 +272,7 @@ class TransformerDecoder(nn.Module):
 
             if self.training:
                 dec_out_logits.append(score_head[i](output))
+                dec_out_masks.append(mask_head[i](output))
                 if i == 0:
                     dec_out_bboxes.append(inter_ref_bbox)
                 else:
@@ -276,14 +281,13 @@ class TransformerDecoder(nn.Module):
             elif i == self.eval_idx:
                 dec_out_logits.append(score_head[i](output))
                 dec_out_bboxes.append(inter_ref_bbox)
+                dec_out_masks.append(mask_head[i](output))
                 break
 
             ref_points = inter_ref_bbox
             ref_points_detach = inter_ref_bbox.detach()
 
-        # Adding output and ref_points_detach for DETRSegm (segmentation.py)
-        return torch.stack(dec_out_bboxes), torch.stack(dec_out_logits), output, ref_points_detach
-
+        return torch.stack(dec_out_bboxes), torch.stack(dec_out_logits), torch.stack(dec_out_masks)
 
 @register()
 class RTDETRTransformerv2(nn.Module):
@@ -380,6 +384,9 @@ class RTDETRTransformerv2(nn.Module):
         self.dec_bbox_head = nn.ModuleList([
             MLP(hidden_dim, hidden_dim, 4, 3) for _ in range(num_layers)
         ])
+        self.dec_mask_head = BasicMaskHead(
+            hidden_dim, 1
+        )
 
         # init encoder output anchors and valid_mask
         if self.eval_spatial_size:
@@ -407,6 +414,12 @@ class RTDETRTransformerv2(nn.Module):
         init.xavier_uniform_(self.query_pos_head.layers[1].weight)
         for m in self.input_proj:
             init.xavier_uniform_(m[0].weight)
+
+        for layer in self.dec_mask_head:
+            if isinstance(layer, nn.Linear):
+                nn.init.xavier_uniform_(layer.weight)
+                if layer.bias is not None:
+                    nn.init.zeros_(layer.bias)
 
     def _build_input_proj_layer(self, feat_channels):
         self.input_proj = nn.ModuleList()
@@ -481,6 +494,7 @@ class RTDETRTransformerv2(nn.Module):
         return anchors, valid_mask
 
 
+    # THIS IS THE QUERY SELECTION
     def _get_decoder_input(self,
                            memory: torch.Tensor,
                            spatial_shapes,
@@ -569,26 +583,32 @@ class RTDETRTransformerv2(nn.Module):
         else:
             denoising_logits, denoising_bbox_unact, attn_mask, dn_meta = None, None, None, None
 
+        # query selection
         init_ref_contents, init_ref_points_unact, enc_topk_bboxes_list, enc_topk_logits_list = \
             self._get_decoder_input(memory, spatial_shapes, denoising_logits, denoising_bbox_unact)
 
         # decoder
-        out_bboxes, out_logits, hs, memory = self.decoder(
+        out_bboxes, out_logits, out_masks = self.decoder(
             init_ref_contents,
             init_ref_points_unact,
             memory,
             spatial_shapes,
             self.dec_bbox_head,
             self.dec_score_head,
+            self.dec_mask_head,
             self.query_pos_head,
             attn_mask=attn_mask)
 
         if self.training and dn_meta is not None:
             dn_out_bboxes, out_bboxes = torch.split(out_bboxes, dn_meta['dn_num_split'], dim=2)
             dn_out_logits, out_logits = torch.split(out_logits, dn_meta['dn_num_split'], dim=2)
+            dn_out_masks, out_masks = torch.split(out_masks, dn_meta['dn_num_split'], dim=2)
 
-        out = {'pred_logits': out_logits[-1], 'pred_boxes': out_bboxes[-1]}
+        out = {'pred_logits': out_logits[-1], 'pred_boxes': out_bboxes[-1], 'pred_masks': out_masks[-1]}
 
+        # NOTE: there is no aux_loss for mask
+        # (aux loss is loss at each decoder layer)
+        # Refer to: https://github.com/facebookresearch/detr/blob/main/models/segmentation.py
         if self.training and self.aux_loss:
             out['aux_outputs'] = self._set_aux_loss(out_logits[:-1], out_bboxes[:-1])
             out['enc_aux_outputs'] = self._set_aux_loss(enc_topk_logits_list, enc_topk_bboxes_list)
@@ -598,7 +618,7 @@ class RTDETRTransformerv2(nn.Module):
                 out['dn_aux_outputs'] = self._set_aux_loss(dn_out_logits, dn_out_bboxes)
                 out['dn_meta'] = dn_meta
 
-        return out, hs, memory
+        return out
 
 
     @torch.jit.unused

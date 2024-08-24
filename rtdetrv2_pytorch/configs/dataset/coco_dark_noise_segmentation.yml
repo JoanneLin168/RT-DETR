@@ -18,9 +18,9 @@ train_dataloader:
   type: DataLoader
   dataset: 
     type: CocoDetection
-    img_folder: ./datasets/coco_dark_noise/train2017/
+    img_folder: ./datasets/coco_dark_noise/images/train2017/
     ann_file: ./datasets/coco_dark_noise/annotations/instances_train2017.json
-    return_masks: False
+    return_masks: True
     transforms:
       type: Compose
       ops: ~
@@ -35,9 +35,9 @@ val_dataloader:
   type: DataLoader
   dataset: 
     type: CocoDetection
-    img_folder: ./datasets/coco_dark_noise/val2017/
+    img_folder: ./datasets/coco_dark_noise/images/val2017/
     ann_file: ./datasets/coco_dark_noise/annotations/instances_val2017.json
-    return_masks: False
+    return_masks: True
     transforms:
       type: Compose
       ops: ~ 

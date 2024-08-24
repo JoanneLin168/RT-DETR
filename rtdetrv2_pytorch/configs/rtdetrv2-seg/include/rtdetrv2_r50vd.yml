@@ -1,6 +1,6 @@
 task: segmentation
 
-model: RTDETR
+model: RTDETRSegm
 criterion: RTDETRCriterionv2
 postprocessor: RTDETRPostProcessor
 
@@ -9,7 +9,7 @@ use_focal_loss: True
 eval_spatial_size: [640, 640] # h w
 
 
-RTDETR: 
+RTDETRSegm: 
   backbone: PResNet
   encoder: HybridEncoder
   decoder: RTDETRTransformerv2
@@ -70,14 +70,14 @@ RTDETRPostProcessor:
 
 
 RTDETRCriterionv2:
-  weight_dict: {loss_vfl: 1, loss_bbox: 5, loss_giou: 2,}
+  weight_dict: {loss_vfl: 1, loss_bbox: 5, loss_giou: 2, loss_masks: 5}
   losses: ['vfl', 'boxes', 'masks']
   alpha: 0.75
   gamma: 2.0
 
   matcher:
     type: HungarianMatcher
-    weight_dict: {cost_class: 2, cost_bbox: 5, cost_giou: 2}
+    weight_dict: {cost_class: 2, cost_bbox: 5, cost_giou: 2, cost_masks: 5}
     alpha: 0.25
     gamma: 2.0
 

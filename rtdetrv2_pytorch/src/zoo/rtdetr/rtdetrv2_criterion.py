@@ -128,12 +128,15 @@ class RTDETRCriterionv2(nn.Module):
         src_idx = self._get_src_permutation_idx(indices)
         tgt_idx = self._get_tgt_permutation_idx(indices)
         src_masks = outputs["pred_masks"]
+        print("pred_masks", src_masks.shape)
         src_masks = src_masks[src_idx]
         masks = [t["masks"] for t in targets]
         # TODO use valid to mask invalid areas due to padding in loss
         target_masks, valid = nested_tensor_from_tensor_list(masks).decompose()
         target_masks = target_masks.to(src_masks)
         target_masks = target_masks[tgt_idx]
+
+        print(src_masks.shape, target_masks.shape)
 
         # upsample predictions to the target size
         src_masks = interpolate(src_masks[:, None], size=target_masks.shape[-2:],

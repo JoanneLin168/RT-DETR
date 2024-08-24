@@ -11,6 +11,7 @@ from src.misc import dist_utils
 from src.core import YAMLConfig, yaml_utils
 from src.solver import TASKS
 
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 def main(args, ) -> None:
     """main

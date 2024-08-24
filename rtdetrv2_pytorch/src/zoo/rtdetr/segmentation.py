@@ -27,47 +27,18 @@ except ImportError:
     pass
 
 
-class DETRsegm(nn.Module):
-    def __init__(self, detr, freeze_detr=False):
-        super().__init__()
-        self.detr = detr
-
-        if freeze_detr:
-            for p in self.parameters():
-                p.requires_grad_(False)
-
-        hidden_dim, nheads = detr.transformer.d_model, detr.transformer.nhead
-        self.bbox_attention = MHAttentionMap(hidden_dim, hidden_dim, nheads, dropout=0)
-        self.mask_head = MaskHeadSmallConv(hidden_dim + nheads, [1024, 512, 256], hidden_dim)
-
-    def forward(self, samples: NestedTensor):
-        if not isinstance(samples, NestedTensor):
-            samples = nested_tensor_from_tensor_list(samples)
-        features, pos = self.detr.backbone(samples)
-
-        bs = features[-1].tensors.shape[0]
-
-        src, mask = features[-1].decompose()
-        src_proj = self.detr.input_proj(src)
-        hs, memory = self.detr.transformer(src_proj, mask, self.detr.query_embed.weight, pos[-1])
-
-        outputs_class = self.detr.class_embed(hs)
-        outputs_coord = self.detr.bbox_embed(hs).sigmoid()
-        out = {"pred_logits": outputs_class[-1], "pred_boxes": outputs_coord[-1]}
-        if self.detr.aux_loss:
-            out["aux_outputs"] = [
-                {"pred_logits": a, "pred_boxes": b} for a, b in zip(outputs_class[:-1], outputs_coord[:-1])
-            ]
-
-        # FIXME h_boxes takes the last one computed, keep this in mind
-        bbox_mask = self.bbox_attention(hs[-1], memory, mask=mask)
-
-        seg_masks = self.mask_head(src_proj, bbox_mask, [features[2].tensors, features[1].tensors, features[0].tensors])
-        outputs_seg_masks = seg_masks.view(bs, self.detr.num_queries, seg_masks.shape[-2], seg_masks.shape[-1])
-
-        out["pred_masks"] = outputs_seg_masks
-        return out
-
+class BasicMaskHead(nn.Sequential):
+    def __init__(self, in_channels, out_channels, kernel_size=3, activation=None, upsampling=1):
+        conv2d = nn.Conv2d(
+            in_channels, out_channels, kernel_size=kernel_size, padding=kernel_size // 2
+        )
+        upsampling = (
+            nn.UpsamplingBilinear2d(scale_factor=upsampling)
+            if upsampling > 1
+            else nn.Identity()
+        )
+        activation = nn.ReLU() if activation is None else activation
+        super().__init__(conv2d, upsampling, activation)
 
 class MaskHeadSmallConv(nn.Module):
     """
