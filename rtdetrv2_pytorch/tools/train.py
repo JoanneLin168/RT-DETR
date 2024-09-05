@@ -12,6 +12,9 @@ from src.core import YAMLConfig, yaml_utils
 from src.solver import TASKS
 
 
+# SET CUDA_VISIBLE_DEVICES TO 0
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+
 def main(args, ) -> None:
     """main
     """
