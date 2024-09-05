@@ -63,28 +63,66 @@ def generalized_box_iou(boxes1, boxes2):
     return iou - (area - union) / area
 
 
-def masks_to_boxes(masks):
-    """Compute the bounding boxes around the provided masks
+# def masks_to_boxes(masks):
+#     """Compute the bounding boxes around the provided masks
 
-    The masks should be in format [N, H, W] where N is the number of masks, (H, W) are the spatial dimensions.
+#     The masks should be in format [N, H, W] where N is the number of masks, (H, W) are the spatial dimensions.
 
-    Returns a [N, 4] tensors, with the boxes in xyxy format
+#     Returns a [N, 4] tensors, with the boxes in xyxy format
+#     """
+#     if masks.numel() == 0:
+#         return torch.zeros((0, 4), device=masks.device)
+
+#     h, w = masks.shape[-2:]
+
+#     y = torch.arange(0, h, dtype=torch.float)
+#     x = torch.arange(0, w, dtype=torch.float)
+#     y, x = torch.meshgrid(y, x)
+
+#     x_mask = (masks * x.unsqueeze(0))
+#     x_max = x_mask.flatten(1).max(-1)[0]
+#     x_min = x_mask.masked_fill(~(masks.bool()), 1e8).flatten(1).min(-1)[0]
+
+#     y_mask = (masks * y.unsqueeze(0))
+#     y_max = y_mask.flatten(1).max(-1)[0]
+#     y_min = y_mask.masked_fill(~(masks.bool()), 1e8).flatten(1).min(-1)[0]
+
+#     return torch.stack([x_min, y_min, x_max, y_max], 1)
+
+def mask_to_box_coordinate(mask,
+                           normalize=False,
+                           format="xyxy",
+                           dtype="float32"):
     """
-    if masks.numel() == 0:
-        return torch.zeros((0, 4), device=masks.device)
+    Compute the bounding boxes around the provided mask.
+    Args:
+        mask (Tensor:bool): [b, c, h, w]
 
-    h, w = masks.shape[-2:]
+    Returns:
+        bbox (Tensor): [b, c, 4]
+    """
+    assert mask.ndim == 4
+    assert format in ["xyxy", "xywh"]
 
-    y = torch.arange(0, h, dtype=torch.float)
-    x = torch.arange(0, w, dtype=torch.float)
-    y, x = torch.meshgrid(y, x)
+    h, w = mask.shape[-2:]
+    y, x = torch.meshgrid(
+        torch.arange(
+            end=h, dtype=dtype), torch.arange(
+                end=w, dtype=dtype))
 
-    x_mask = (masks * x.unsqueeze(0))
-    x_max = x_mask.flatten(1).max(-1)[0]
-    x_min = x_mask.masked_fill(~(masks.bool()), 1e8).flatten(1).min(-1)[0]
+    x_mask = x * mask.astype(x.dtype)
+    x_max = x_mask.flatten(-2).max(-1) + 1
+    x_min = torch.where(mask.astype(bool), x_mask,
+                         torch.to_tensor(1e8)).flatten(-2).min(-1)
 
-    y_mask = (masks * y.unsqueeze(0))
-    y_max = y_mask.flatten(1).max(-1)[0]
-    y_min = y_mask.masked_fill(~(masks.bool()), 1e8).flatten(1).min(-1)[0]
+    y_mask = y * mask.astype(y.dtype)
+    y_max = y_mask.flatten(-2).max(-1) + 1
+    y_min = torch.where(mask.astype(bool), y_mask,
+                         torch.to_tensor(1e8)).flatten(-2).min(-1)
+    out_bbox = torch.stack([x_min, y_min, x_max, y_max], axis=-1)
+    mask = mask.any(axis=[2, 3]).unsqueeze(2)
+    out_bbox = out_bbox * mask.astype(out_bbox.dtype)
+    if normalize:
+        out_bbox /= torch.to_tensor([w, h, w, h]).astype(dtype)
 
-    return torch.stack([x_min, y_min, x_max, y_max], 1)
+    return out_bbox if format == "xyxy" else box_xyxy_to_cxcywh(out_bbox)
