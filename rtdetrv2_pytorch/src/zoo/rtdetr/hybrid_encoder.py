@@ -8,12 +8,14 @@ import torch
 import torch.nn as nn 
 import torch.nn.functional as F 
 
+import numpy as np
+
 from .utils import get_activation
 
 from ...core import register
 
 
-__all__ = ['HybridEncoder']
+__all__ = ['HybridEncoder', 'MaskHybridEncoder']
 
 
 
@@ -290,7 +292,8 @@ class HybridEncoder(nn.Module):
         return torch.concat([out_w.sin(), out_w.cos(), out_h.sin(), out_h.cos()], dim=1)[None, :, :]
 
     def forward(self, feats):
-        assert len(feats) == len(self.in_channels)
+        assert len(feats) == len(self.in_channels), \
+            f"len(feats) and len(in_channels) do not match: {len(feats)} != {len(self.in_channels)}"
         proj_feats = [self.input_proj[i](feat) for i, feat in enumerate(feats)]
         
         # encoder
@@ -328,3 +331,160 @@ class HybridEncoder(nn.Module):
             outs.append(out)
 
         return outs
+    
+
+class MaskFeatFPN(nn.Module):
+    def __init__(self,
+                 in_channels=[256, 256, 256],
+                 fpn_strides=[32, 16, 8],
+                 feat_channels=256,
+                 dropout_ratio=0.0,
+                 out_channels=256,
+                 align_corners=False,
+                 act='swish'):
+        super(MaskFeatFPN, self).__init__()
+        assert len(in_channels) == len(fpn_strides)
+
+        reorder_index = np.argsort(fpn_strides, axis=0)
+        in_channels = [in_channels[i] for i in reorder_index]
+        fpn_strides = [fpn_strides[i] for i in reorder_index]
+        assert min(fpn_strides) == fpn_strides[0]
+
+        self.reorder_index = reorder_index
+        self.fpn_strides = fpn_strides
+        self.dropout_ratio = dropout_ratio
+        self.align_corners = align_corners
+        if self.dropout_ratio > 0:
+            self.dropout = nn.Dropout2D(dropout_ratio)
+
+        self.scale_heads = nn.ModuleList()
+        for i in range(len(fpn_strides)):
+            head_length = max(
+                1, int(np.log2(fpn_strides[i]) - np.log2(fpn_strides[0])))
+            scale_head = []
+            for k in range(head_length):
+                in_c = in_channels[i] if k == 0 else feat_channels
+                scale_head.append(
+                    nn.Sequential(OrderedDict([
+                        ('conv', nn.Conv2d(in_c, feat_channels, 3, 1, padding=1)),
+                        ('norm', nn.BatchNorm2d(feat_channels))
+                    ]))
+                )
+                if fpn_strides[i] != fpn_strides[0]:
+                    scale_head.append(
+                        nn.Upsample(
+                            scale_factor=2,
+                            mode='bilinear',
+                            align_corners=align_corners))
+
+            self.scale_heads.append(nn.Sequential(*scale_head))
+
+        self.output_conv = nn.Sequential(OrderedDict([
+                    ('conv', nn.Conv2d(feat_channels, out_channels, kernel_size=1, bias=False)),
+                    ('norm', nn.BatchNorm2d(out_channels))
+                ]))
+
+    def forward(self, inputs):
+        x = [inputs[i] for i in self.reorder_index]
+
+        output = self.scale_heads[0](x[0])
+        for i in range(1, len(self.fpn_strides)):
+            output = output + F.interpolate(
+                self.scale_heads[i](x[i]),
+                size=output.shape[2:],
+                mode='bilinear',
+                align_corners=self.align_corners)
+
+        if self.dropout_ratio > 0:
+            output = self.dropout(output)
+        output = self.output_conv(output)
+        return output
+
+
+# REFERENCE: https://github.com/PaddlePaddle/PaddleDetection/blob/release/2.7.1/ppdet/modeling/transformers/hybrid_encoder.py#L368
+@register()
+class MaskHybridEncoder(HybridEncoder):
+    __shared__ = ['num_classes', 'hidden_dim', 'eval_spatial_size', 'num_prototypes']
+
+    def __init__(self,
+                 in_channels=[256, 512, 1024, 2048],
+                 feat_strides=[4, 8, 16, 32],
+                 hidden_dim=256,
+                 nhead=8,
+                 dim_feedforward = 1024,
+                 dropout=0.0,
+                 enc_act='gelu',
+                 use_encoder_idx=[3],
+                 num_encoder_layers=1,
+                 pe_temperature=10000,
+                 expansion=1.0,
+                 depth_mult=1.0,
+                 act='silu',
+                 eval_spatial_size=None, 
+                 version='v2',
+                 
+                 mask_feat_channels=[64, 64],
+                 num_prototypes=32,
+                 
+                 ksize = 3):
+        
+        
+        # We're removing the output from res2, and passing in res3, res4, and res5 to HybridEncoder
+        # res2 is for the mask head
+        assert len(in_channels) == len(feat_strides)
+        x4_feat_dim = in_channels.pop(0)
+        x4_feat_stride = feat_strides.pop(0)
+        use_encoder_idx = [i - 1 for i in use_encoder_idx]
+        assert x4_feat_stride == 4
+        
+        super().__init__(in_channels=in_channels,
+            feat_strides=feat_strides,
+            hidden_dim=hidden_dim,
+            use_encoder_idx=use_encoder_idx,
+            num_encoder_layers=num_encoder_layers,
+            pe_temperature=pe_temperature,
+            expansion=expansion,
+            depth_mult=depth_mult,
+            act=act,
+            eval_spatial_size=eval_spatial_size)
+        
+
+        self.mask_feat_head = MaskFeatFPN(
+            [hidden_dim] * len(feat_strides),
+            feat_strides,
+            feat_channels=mask_feat_channels[0],
+            out_channels=mask_feat_channels[1],
+            act=act)
+        
+        self.enc_mask_lateral = nn.Sequential(OrderedDict([
+                ('conv', nn.Conv2d(x4_feat_dim, mask_feat_channels[1], ksize, 1, padding=1)),
+                ('norm', nn.BatchNorm2d(mask_feat_channels[1]))
+            ]))
+        self.enc_mask_output = nn.Sequential(
+            nn.Sequential(
+                OrderedDict([
+                    ('conv', nn.Conv2d(mask_feat_channels[1], mask_feat_channels[1], 3, 1, padding=1)),
+                    ('norm', nn.BatchNorm2d(mask_feat_channels[1]))
+                ])),
+            nn.Conv2d(mask_feat_channels[1], num_prototypes, 1))
+
+    # TODO: figure out if you can load the paddlepaddle weights for maskrtdetr
+    # TODO: for some reason, even the normal blocks in hybridencoder arent getting loaded in
+    def forward(self, feats):
+        x4_feat = feats.pop(0)
+        # mask_shape = x4_feat.shape[-2:]
+
+        enc_feats = super(MaskHybridEncoder, self).forward(feats)
+
+        mask_feat = self.mask_feat_head(enc_feats)
+        mask_feat = F.interpolate(
+            mask_feat,
+            scale_factor=2,
+            mode='bilinear',
+            align_corners=False)
+
+        mask_lateral = self.enc_mask_lateral(x4_feat)
+        mask_feat += self.enc_mask_lateral(x4_feat)
+        mask_feat = self.enc_mask_output(mask_feat)
+
+        return enc_feats, mask_feat

@@ -12,3 +12,9 @@ from .rtdetr_postprocessor import RTDETRPostProcessor
 # v2
 from .rtdetrv2_decoder import RTDETRTransformerv2
 from .rtdetrv2_criterion import RTDETRCriterionv2
+
+# MaskRTDETR
+from .rtdetr import MaskRTDETR
+from .hybrid_encoder import MaskHybridEncoder
+from .maskrtdetr_decoder import MaskRTDETRTransformer
+from .maskrtdetr_criterion import MaskRTDETRCriterion

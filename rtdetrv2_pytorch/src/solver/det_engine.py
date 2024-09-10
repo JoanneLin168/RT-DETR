@@ -130,11 +130,8 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessor, 
         orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
         # orig_target_sizes = torch.tensor([[samples.shape[-1], samples.shape[-2]]], device=samples.device)
         
-        results = postprocessor(outputs, orig_target_sizes)
-
-        # if 'segm' in postprocessor.keys():
-        #     target_sizes = torch.stack([t["size"] for t in targets], dim=0)
-        #     results = postprocessor['segm'](results, outputs, orig_target_sizes, target_sizes)
+        target_sizes = torch.stack([t["size"] for t in targets], dim=0)
+        results = postprocessor(outputs, orig_target_sizes, target_sizes)
 
         res = {target['image_id'].item(): output for target, output in zip(targets, results)}
         if coco_evaluator is not None:
